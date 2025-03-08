@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Mina', sans-serif;
+  }
+
+  body {
+    @apply bg-white dark:bg-gray-900;
+  }
+
+  #root {
+    @apply min-h-screen bg-white dark:bg-gray-900;
+  }
+}
+
+/* Ensure smooth transitions */
+* {
+  @apply transition-colors duration-200;
+}
+
+/* Force dark mode colors */
+:root.dark body,
+:root.dark #root {
+  @apply bg-gray-900 text-white;
+}
+
+/* Force light mode colors */
+:root:not(.dark) body,
+:root:not(.dark) #root {
+  @apply bg-white text-gray-900;
+}
