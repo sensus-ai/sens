@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabase';
 import { rewardUser } from '../lib/token';
 import TopicSelector from './TopicSelector';
 import NotificationModal from './NotificationModal';
+import DescriptionModal from './DescriptionModal';
 
 const MIN_RECORDING_DURATION = 10; // Minimum 10 seconds for any reward
 
@@ -29,6 +30,9 @@ const VideoRecorder = () => {
   });
   const [facingMode, setFacingMode] = useState("user");
   const [isMobile, setIsMobile] = useState(false);
+  const [showDescriptionModal, setShowDescriptionModal] = useState(false);
+  const [currentVideoUrl, setCurrentVideoUrl] = useState('');
+  const [recordingToUpload, setRecordingToUpload] = useState(null);
 
   const address = useAddress();
   const webcamRef = useRef(null);
@@ -365,12 +369,12 @@ const VideoRecorder = () => {
       setUploadProgress(100);
       
       if (rewardResult.success) {
-        showNotification('Success!', rewardResult.message);
+        setCurrentVideoUrl(publicUrl); // Set the video URL first
+        setShowDescriptionModal(true); // Show description modal
       } else {
         showNotification('Warning', rewardResult.message, 'warning');
       }
       
-      setStep('topic');
     } catch (error) {
       console.error('Error processing recording:', error);
       showNotification(
@@ -386,6 +390,102 @@ const VideoRecorder = () => {
       setRecordingBlob(null);
       setSelectedTopic(null);
       chunksRef.current = [];
+    }
+  };
+
+  const handleFinishRecording = () => {
+    setShowDescriptionModal(true);
+    setRecordingToUpload(recordingBlob);
+  };
+
+  const uploadVideo = async (videoBlob) => {
+    try {
+      const file = new File([videoBlob], 'recording.webm', { type: videoBlob.type });
+      const filePath = `${session.user.id}/${Date.now()}.webm`;
+      
+      // Changed 'videos' to 'recordings' to match existing bucket
+      const { error: uploadError, data } = await supabase.storage
+        .from('recordings')
+        .upload(filePath, file);
+
+      if (uploadError) throw uploadError;
+
+      const { data: { publicUrl }, error: urlError } = await supabase.storage
+        .from('recordings')
+        .getPublicUrl(filePath);
+
+      if (urlError) throw urlError;
+
+      return { publicUrl };
+    } catch (error) {
+      console.error('Error uploading video:', error);
+      throw error;
+    }
+  };
+
+  const handleUploadWithDescription = async (description, videoBlob) => {
+    setIsUploading(true);
+    try {
+      // Upload video first
+      const fileName = `${Date.now()}-${address}.webm`;
+      setUploadProgress(20);
+
+      // Upload to storage
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('recordings')
+        .upload(fileName, videoBlob, {
+          cacheControl: '3600',
+          upsert: false
+        });
+
+      if (uploadError) throw uploadError;
+      setUploadProgress(50);
+
+      // Get public URL
+      const { data: { publicUrl } } = supabase.storage
+        .from('recordings')
+        .getPublicUrl(fileName);
+
+      setUploadProgress(70);
+
+      // Create recording record with description
+      const { error: dbError } = await supabase
+        .from('recordings')
+        .insert({
+          user_id: address,
+          topic: selectedTopic,
+          duration: recordingTime,
+          video_url: publicUrl,
+          description: description,
+          rewarded: false,
+          verified: false,
+          flagged: false
+        });
+
+      if (dbError) throw dbError;
+      setUploadProgress(85);
+
+      // Attempt to reward user
+      const rewardResult = await rewardUser(address, recordingTime);
+      setUploadProgress(100);
+
+      if (rewardResult.success) {
+        showNotification('Success!', rewardResult.message);
+      } else {
+        showNotification('Warning', rewardResult.message, 'warning');
+      }
+
+      // Reset states
+      setShowDescriptionModal(false);
+      setRecordingToUpload(null);
+      resetRecordingState();
+      setStep('topic');
+    } catch (error) {
+      console.error('Upload failed:', error);
+      showNotification('Error', 'Failed to upload video', 'error');
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(0);
     }
   };
 
@@ -565,11 +665,11 @@ const VideoRecorder = () => {
                 Record Again
               </button>
               <button
-                onClick={handleUpload}
+                onClick={handleFinishRecording}
                 disabled={isUploading}
                 className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
               >
-                {isUploading ? 'Uploading...' : 'Upload Recording'}
+                {isUploading ? 'Uploading...' : 'Upload Video'}
               </button>
             </div>
 
@@ -612,16 +712,27 @@ const VideoRecorder = () => {
   // --------------------- RETURN ---------------------
 
   return (
-    <div className="min-h-[calc(100vh-300px)] flex flex-col items-center justify-center p-4 bg-white/50 dark:bg-gray-900/50 backdrop-blur-sm rounded-lg transition-colors duration-200">
-      {renderStep()}
-      <NotificationModal
-        isOpen={notification.isOpen}
-        onClose={closeNotification}
-        title={notification.title}
-        message={notification.message}
-        type={notification.type}
+    <>
+      <div className="min-h-[calc(100vh-300px)] flex flex-col items-center justify-center p-4 bg-white/50 dark:bg-gray-900/50 backdrop-blur-sm rounded-lg transition-colors duration-200">
+        {renderStep()}
+        <NotificationModal
+          isOpen={notification.isOpen}
+          onClose={closeNotification}
+          title={notification.title}
+          message={notification.message}
+          type={notification.type}
+        />
+      </div>
+      <DescriptionModal
+        isOpen={showDescriptionModal}
+        onClose={() => {
+          setShowDescriptionModal(false);
+          setRecordingToUpload(null);
+        }}
+        videoBlob={recordingBlob}
+        onSubmit={handleUploadWithDescription}
       />
-    </div>
+    </>
   );
 };
 
